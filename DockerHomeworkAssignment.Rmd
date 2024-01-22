@@ -1,0 +1,43 @@
+---
+title: "19 Jan 2024 HW - Docker"
+output: html_notebook
+---
+
+```{r}
+# Create a 5 by 10 matrix of random integers
+set.seed(10)
+ints <- sample(0:100, 50, replace=T)
+dim(ints) <- c(5, 10)
+ints
+
+# Define rownames and column names
+colnames(ints) <- c("cond1", "cond2", "cond3", "cond4", "cond5", "ctrl1", "ctrl2", "ctrl3", "ctrl4", "ctrl5")
+rownames(ints) <- c("gene1", "gene2", "gene3", "gene4", "gene5")
+
+ints
+
+```
+```{r}
+ints <- data.frame(ints)
+ints 
+
+averages <- data.frame(matrix(nrow = 0, ncol = 3, byrow = FALSE))
+colnames(averages) <- c("Gene", "CtrlAvg", "CondAvg")
+
+# calculate the averages for control and condition groups
+for (i in seq_along(rownames(ints))){
+  condAvg <- sum(ints[i, 1:5]) / 5
+  ctrlAvg <- sum(ints[i, 6:10]) / 5
+  averages[nrow(averages)+1, ] <- c(paste("Gene", i), ctrlAvg, condAvg)
+}
+averages$CondAvg <- as.numeric(averages$CondAvg)
+averages$CtrlAvg <- as.numeric(averages$CtrlAvg)
+averages
+```
+
+```{r}
+averages["fold_change"] <- log2((averages["CondAvg"] / averages["CtrlAvg"]))
+
+averages
+```
+
