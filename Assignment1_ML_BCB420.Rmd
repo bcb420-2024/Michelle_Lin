@@ -1,0 +1,308 @@
+---
+title: "A1: Exploration and Cleaning of Dataset"
+author: "Michelle Lin"
+date: "15 Feb 2024"
+output: 
+  html_notebook:
+    toc: true
+    toc_depth: 2
+bibliography: A1_Bibliography.bib
+---
+
+## Set Up
+
+```{r hide=TRUE, message = FALSE, warning = FALSE}
+# Set up and Install all Libraries if not present
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+if (!requireNamespace("GEOquery", quietly = TRUE))
+    install.packages("GEOquery")
+
+if (!requireNamespace("knitr", quietly = TRUE))
+    install.packages("knitr")
+
+if (!requireNamespace("edgeR", quietly = TRUE))
+    install.packages("edgeR")
+
+if (!requireNamespace("hrbrthemes", quietly = TRUE))
+    install.packages("hrbrthemes")
+
+if (!requireNamespace("ggplot2", quietly = TRUE))
+    install.packages("ggplot2")
+
+```
+
+```{r message = FALSE, warning = FALSE}
+# Set GEOID 
+GEOID <- "GSE160230"
+setwd("/home/rstudio/projects")
+
+## File location
+workingDir <- file.path(getwd())
+
+```
+
+
+
+## Study Background Information
+The study chosen for this project is "hPSC-derived Airway Organoids-based Screen Reveals the Role of HIF1/ Glycolysis Axis in SARS-CoV-2 Infection" published in 2021 by Duan et al.[@duan2021airway]
+
+The authors conducted a study in human pluripotent stem cell  (hPSC) derived airway organoids - (hPSC-AO) where they studied the molecular mechanism behind SARS-Cov-2 infections and the differential expression of different components of the pathways when treated with GW6571.
+
+The following is a summary of the study chosen for this assignment. 
+```{r warning=FALSE, message=FALSE, }
+# get information for study
+
+gse <- GEOquery::getGEO(GEOID, GSEMatrix = FALSE)
+currentGPL <- names(GEOquery::GPLList(gse))[1]
+currentGPLInfo <- GEOquery::Meta(GEOquery::getGEO(currentGPL))
+
+```
+**GEO ID of data set:** GSE160230 
+
+**Organism: ** `r currentGPLInfo$organism` 
+
+**Submission Date:** `r gse@header$submission_date`
+
+**Last Updated: ** `r gse@header$last_update_date`
+
+**Brief Summary of data set:** `r gse@header$summary` 
+
+**Platform:** `r currentGPLInfo$title` 
+
+**Platform Last Updated: ** `r currentGPLInfo$last_update_date`
+
+
+## Get Expression Data Files
+```{r message = FALSE, warning = FALSE}
+# Set Up + Download Data if not present
+
+filesSupp <- GEOquery::getGEOSuppFiles(GEOID, fetch_files= FALSE)
+
+fileMissing <- filesSupp$fname[!unlist(
+  lapply(filesSupp$fname, FUN=function(x){
+    file.exists(
+      file.path(workingDir,GEOID,x))}))]
+
+if(length(fileMissing) >0){
+  for(i in seq_along(fileMissing)){
+    # get the supplementary files
+    sfiles = GEOquery::getGEOSuppFiles(GEOID, 
+                                       sfiles = GEOquery::getGEOSuppFiles(GEOID, 
+                                                                          baseDir = workingDir,
+                                                                          fetch_files = TRUE)
+    )
+  }
+}
+```
+
+The supplementary files found in this dataset are: 
+
+`r filesSupp$fname`
+
+For this study, we will pay particular attention to the "GSE160230_raw_counts.hPSC_AO.txt.gz" in particular.
+
+
+
+## 1. Load and Preprocess Data
+```{r message = FALSE, warning = FALSE }
+
+# Read data files
+dataFile <- "GSE160230_raw_counts.hPSC_AO.txt.gz"
+  
+aoCtrlTreatMat <- utils::read.table(
+  file.path(workingDir, GEOID, dataFile),
+  header = TRUE,
+  check.names = TRUE
+)
+
+dim(aoCtrlTreatMat)
+
+knitr::kable(aoCtrlTreatMat[1:7, 1:10], format = "html")
+
+# Initial Pre-processing of data
+any(is.na(aoCtrlTreatMat))
+```
+**Summary of Data Preprocessing: ** The raw counts matrix contains 48815 observations for 9 samples - 3 mock, 3 control and 3 treated samples. It was found that there were no missing values so we can move onto the next step.
+
+
+
+## Mapping to HUGO Gene Symbols
+```{r message = FALSE, warning = FALSE}
+library(biomaRt)
+
+# Ensembl
+ensembl <- biomaRt::useMart("ensembl")
+datasetEnsembl <- biomaRt::listDatasets(ensembl)
+knitr::kable(head(datasetEnsembl[grep(datasetEnsembl$dataset, pattern = "sapiens"), ]), format = "html")
+ensembl <- biomaRt::useDataset("hsapiens_gene_ensembl", mart=ensembl)
+
+# filters
+biomartHumanFilters <- biomaRt::listFilters(ensembl) 
+knitr::kable(biomartHumanFilters[
+  grep(biomartHumanFilters$name, pattern="ensembl"), ], format = "html")
+
+# create conversion object if not present and save
+stashConversion <- "ensemblHUGOConversion.rds"
+rownames(aoCtrlTreatMat) <- aoCtrlTreatMat$gene_id
+ids2convert <- aoCtrlTreatMat$gene_id
+if(file.exists(stashConversion)){
+  conversionLink <- readRDS(stashConversion)
+} else {
+  conversionLink <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol"),
+                          filters = c("ensembl_gene_id"),
+                          values = ids2convert,
+                          mart =ensembl )
+  saveRDS(conversionLink, stashConversion)
+}
+
+
+# Merge identifier with original table
+objAnnotated <- merge(conversionLink, aoCtrlTreatMat, by.x = 1, by.y = 0, all.y = TRUE)
+
+```
+
+### Remove Unmapped Genes
+```{r message = FALSE, warning = FALSE}
+# Find the number of genes that remained unmatched
+
+
+## number of genes mapped
+mappedGenes <- length(which(rownames(aoCtrlTreatMat) %in% 
+               conversionLink$ensembl_gene_id))
+
+## total num_genes 
+totalGenes <- nrow(aoCtrlTreatMat)
+
+## number of genes missing
+unmatchedIDs <- totalGenes - mappedGenes
+
+## show table
+unmatched <- objAnnotated[which(is.na(objAnnotated$hgnc_symbol)), ]
+unmatchedEg <- knitr::kable(objAnnotated[which(is.na(objAnnotated$hgnc_symbol))[1:5], 1:5], type = "html")
+
+matchObj <- objAnnotated[!(is.na(objAnnotated$hgnc_symbol)), ]
+
+```
+### Combine Rows with the same Gene Names
+```{r message = FALSE, warning = FALSE}
+# create a table for HUGO genes on row and sample on column
+length(unique(matchObj$hgnc_symbol))
+length(unique(matchObj$ensembl_gene_id))
+
+duplicatedGenes <- unique(matchObj$hgnc_symbol[duplicated(matchObj$hgnc_symbol)])
+uniqueGenes <- unique(matchObj$hgnc_symbol)
+
+matchObj <- matchObj[, -c(1, 3)]
+
+aggmatchObj <- aggregate(.~hgnc_symbol, data = matchObj, FUN=sum)
+
+  
+aggmatchObj <- aggmatchObj[-c(aggmatchObj$hgnc_symbol == ""), ]
+```
+
+**Summary: ** It was found that there were `r unmatchedIDs` ensembl Gene IDs not matched to HUGO genes. Some of which are shown below: 
+
+`r unmatchedEg`
+
+These unmatched genes may be due to potentially outdated codes. Unfortunately, we will have to remove these genes from our analysis moving forward. 
+
+I then combined the rows where the genes are the same to create a new table where we have unique genes on each row. 
+This results in a final dataframe with 33833 genes and 9 samples- 3 mock, 3 infected and 3 downsampled.
+
+
+
+### Remove Low Expression Genes
+
+```{r message = FALSE, warning = FALSE}
+# choose min number of samples
+min_samples <- 3
+
+aggMat <- as.matrix(aggmatchObj)
+rownames(aggMat) <- aggMat[, 1]
+aggMat <- aggMat[,-1]
+
+aggMat <- trimws(aggMat)
+
+for (ri in seq_along(rownames(aggMat))){
+  for (cj in seq_along(colnames(aggMat))){
+    aggMat[ri, cj] <- as.integer(aggMat[ri, cj])
+  }
+}
+
+int_matrix <- matrix(as.integer(aggMat), nrow = nrow(aggMat), ncol = ncol(aggMat))
+colnames(int_matrix) <- colnames(aggMat)
+rownames(int_matrix) <- rownames(aggMat)
+
+satisfied <- rowSums(edgeR::cpm(int_matrix) > 1) >= min_samples
+cleanData <- int_matrix[satisfied, ]
+
+save(cleanData, file = file.path(workingDir, GEOID, "CleanedDataset.csv"))
+```
+
+```{r message = FALSE, warning = FALSE}
+# Plot the data before and after
+library(hrbrthemes)
+library(ggplot2)
+
+dataLog <- log2(edgeR::cpm(cleanData))
+
+boxplot(dataLog, xlab="Sample_C", ylab="Log2 of CPM", 
+        main = "Prenormalisation")
+```
+
+## Normalisation 
+```{r message = FALSE, warning = FALSE}
+# Plot for the before and after
+groups <- c("GroupM", "GroupM", "GroupM", "GroupD", "GroupD", "GroupD", "GroupG", "GroupG", "GroupG")
+
+ofDGE <- edgeR::DGEList(counts = cleanData, group=groups)
+ofDGE <- edgeR::calcNormFactors(ofDGE)
+
+normalised <- edgeR::cpm(ofDGE)
+
+limma::plotMDS(ofDGE, labels=NULL, pch=1,
+               col = c("red", "green", "blue")[factor(groups)])
+
+legend("topright",
+  legend=levels(factor(groups)),
+  pch=c(1), col= c("red", "green","blue"),title="Class",
+  bty = 'n', cex = 0.75)
+
+```
+
+## Answers to Questions
+
+1. What are the control and test conditions of the dataset?
+-- the control and test conditions for this dataset were whether if the organoids were treated with GW6571 or not with control, represented by "m" being not treated and "g" for being treated.
+
+
+2. Why is the data set of interest to you?
+-- this data set was of interest to me as we recently came out of an unprecedented global pandemic caused by the SARS-Cov-2 virus and thus, I was interested in learning more about how infections can be blocked. Furthermore, this particular paper grabbed my interest in its use of organoids generated from human pluripotent stem cells which is a relatively new and interesting technology for conducting research.
+
+
+3. Were there expression values that were not unique for specific genes? How did you handle these?
+-- In the cleaning of this dataset, there seemed to be genes that were replicated in the table and thus, in order to handle these, after mapping, I combined the rows for the duplicated genes to create a unique row of expression for each unique gene.
+
+
+4. Were there expression values that could not be mapped to current HUGO symbols?
+-- Yes, there were approximately 2928 unmatched genes.There were also 12054 unlabelled genes that is mostlikely due to them being viral genes.
+
+5. How many outliers were removed?
+-- From the boxplot, the distribution for the genes seemed to be relatively close and there did not seem to be any outliers present as this was handled by the authors by downsampling to create the same distribution for both conditions as the GW6571 treated samples would have a higher human gene count due to the lower viral genes present. 
+
+6. How did you handle replicates?
+-- Replicate genes were combined by summing. 
+
+7. What is the final coverage of your dataset?
+-- The final matrix has 14,644 unique rows out of the 48816 initial gene_ids recorded.
+
+## Bibliography
+
+
+
+
+
+
