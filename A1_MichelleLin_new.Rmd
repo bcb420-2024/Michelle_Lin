@@ -1,0 +1,358 @@
+---
+title: "A1 New: Exploration and Cleaning of Dataset"
+author: "Michelle Lin"
+date: "12 March 2024"
+output: 
+  html_notebook:
+    toc: true
+    toc_depth: 2
+bibliography: A1_Bibliography.bib
+---
+
+```{r hide=TRUE, message = FALSE, warning = FALSE, include=FALSE}
+# Set up and Install all Libraries if not present
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+if (!requireNamespace("GEOquery", quietly = TRUE))
+    install.packages("GEOquery")
+
+if (!requireNamespace("knitr", quietly = TRUE))
+    install.packages("knitr")
+
+if (!requireNamespace("edgeR", quietly = TRUE))
+    install.packages("edgeR")
+
+if (!requireNamespace("hrbrthemes", quietly = TRUE))
+    install.packages("hrbrthemes")
+
+if (!requireNamespace("ggplot2", quietly = TRUE))
+    install.packages("ggplot2")
+
+if (!requireNamespace("tidyr", quietly = TRUE))
+    install.packages("tidyr")
+
+
+```
+
+## IMPORT DATA AND INITIAL EXPLORATION
+
+### Set Global variables and constants
+```{r message = FALSE, warning = FALSE}
+# Set GEOID 
+GEOID <- "GSE160230"
+
+## File location
+workingDir <- file.path(getwd())
+```
+
+
+
+### Study Background Information
+The study chosen for this project is "hPSC-derived Airway Organoids-based Screen Reveals the Role of HIF1/ Glycolysis Axis in SARS-CoV-2 Infection" published in 2021 by Duan et al.[@duan2021airway]
+
+The authors conducted a study in human pluripotent stem cell  (hPSC) derived airway organoids - (hPSC-AO) where they studied the molecular mechanism behind SARS-Cov-2 infections and the differential expression of different components of the pathways when treated with GW6571.
+
+The following is a summary of the study chosen for this assignment. 
+```{r warning=FALSE, message=FALSE, }
+# get information for study
+
+gse <- GEOquery::getGEO(GEOID, GSEMatrix = FALSE)
+currentGPL <- names(GEOquery::GPLList(gse))[1]
+currentGPLInfo <- GEOquery::Meta(GEOquery::getGEO(currentGPL))
+
+```
+**GEO ID of data set:** GSE160230 
+
+**Organism: ** `r currentGPLInfo$organism` 
+
+**Submission Date:** `r gse@header$submission_date`
+
+**Last Updated: ** `r gse@header$last_update_date`
+
+**Brief Summary of data set:** `r gse@header$summary` 
+
+**Platform:** `r currentGPLInfo$title` 
+
+**Platform Last Updated: ** `r currentGPLInfo$last_update_date`
+
+
+### Get Expression Data Files
+```{r message = FALSE, warning = FALSE}
+# Set Up + Download Data if not present
+
+filesSupp <- GEOquery::getGEOSuppFiles(GEOID, fetch_files= FALSE)
+
+fileMissing <- filesSupp$fname[!unlist(
+  lapply(filesSupp$fname, FUN=function(x){
+    file.exists(
+      file.path(workingDir,GEOID,x))}))]
+
+if(length(fileMissing) > 0){
+  for(i in seq_along(fileMissing)){
+    # get the supplementary files
+    sfiles = GEOquery::getGEOSuppFiles(GEOID, 
+                                       baseDir = workingDir,
+                                       fetch_files = TRUE)
+  }
+}
+```
+
+The supplementary files found in this dataset are: 
+
+`r filesSupp$fname` 
+
+For this study, we will pay particular attention to the "GSE160230_raw_counts.hPSC_AO.downsample.txt" i*n particular. 
+
+There were three conditions observed in this study - **3 mock samples** - untreated and uninfected, **3 control samples** - untreated and infected and **3 GW_treated samples** - treated and infected samples. Due to the difference in higher observed viral counts and hence, lower human gene counts in SARS-Cov2 infected samples, the raw counts in the uninfected samples (mock and treated) was down-sampled so that the median human gene count was comparable to that in the infected samples. [@duan2021airway]
+
+
+## 1. Load and Preprocess Data
+```{r message = FALSE, warning = FALSE }
+# Read data files
+dataFile <- "GSE160230_raw_counts.hPSC_AO.downsample.txt.gz"
+  
+aoCtrlTreatMat <- utils::read.table(
+  file.path(workingDir, GEOID, dataFile),
+  header = TRUE,
+  check.names = TRUE
+)
+```
+
+The dataset is of shape (`r dim(aoCtrlTreatMat)`) with 48815 genes and 9 samples- 3 mock (m), 3 untreated and infected (d), 3 treated and infected (gw).
+A preview of the dataset can be seen below: 
+```{r message = FALSE, warning = FALSE }
+knitr::kable(aoCtrlTreatMat[1:7, 1:9], format = "html")
+```
+```{r message = FALSE, warning = FALSE,, hide=TRUE}
+# Initial Pre-processing of data
+any(is.na(aoCtrlTreatMat))
+```
+There were no missing values found in this dataset.
+
+## HUGO GENE SYMBOL MATCH
+
+The following is a table of some of the Ensembl human datasets.
+```{r message = FALSE, warning = FALSE}
+library(biomaRt)
+
+# Ensembl
+ensembl <- biomaRt::useMart("ensembl")
+datasetEnsembl <- biomaRt::listDatasets(ensembl)
+knitr::kable(head(datasetEnsembl[grep(datasetEnsembl$dataset, pattern = "sapiens"), ]), format = "html")
+ensembl <- biomaRt::useDataset("hsapiens_gene_ensembl", mart=ensembl)
+```
+
+```{r}
+# filters
+biomartHumanFilters <- biomaRt::listFilters(ensembl) 
+knitr::kable(biomartHumanFilters[
+  grep(biomartHumanFilters$name, pattern="ensembl"), ], format = "html")
+
+# create conversion object if not present and save
+stashConversion <- "ensemblHUGOConversion.rds"
+ids2convert <- rownames(aoCtrlTreatMat)
+if(file.exists(stashConversion)){
+  conversionLink <- readRDS(stashConversion)
+} else {
+  conversionLink <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol"),
+                          filters = c("ensembl_gene_id"),
+                          values = ids2convert,
+                          mart =ensembl )
+  saveRDS(conversionLink, stashConversion)
+}
+
+
+# Merge identifier with original table
+objAnnotated <- merge(conversionLink, aoCtrlTreatMat, by.x = 1, by.y = 0, all.y = TRUE)
+
+```
+
+
+
+### Remove Unmapped Genes
+```{r message = FALSE, warning = FALSE}
+# Find the number of genes that remained unmatched
+
+## number of genes mapped
+mappedGenes <- length(which(rownames(aoCtrlTreatMat) %in% 
+               conversionLink$ensembl_gene_id))
+
+## total num_genes 
+totalGenes <- nrow(aoCtrlTreatMat)
+
+## number of genes missing
+unmatchedGenes <- totalGenes - mappedGenes
+
+```
+There were `r mappedGenes` mapped human genes of the total `r totalGenes` transcribed and `r unmatchedGenes` genes remained unmatched. This is potentially due to 2 main reasons - outdated Ensembl mappings and the remaining genes being viral genes which we are not interested in. 
+
+```{r message = FALSE, warning = FALSE}
+## show table
+unmatched <- objAnnotated[which(is.na(objAnnotated$hgnc_symbol)), ]
+unmatchedEg <- knitr::kable(objAnnotated[which(is.na(objAnnotated$hgnc_symbol))[1:5], 1:5], type = "html")
+
+matchObj <- objAnnotated[!(is.na(objAnnotated$hgnc_symbol)), ]
+```
+There were `r length(unmatched$ensembl_gene_id)` genes that remained unmatched. Some examples of which are: `r unmatchedEg`.
+
+
+### Combine Rows with the same Gene Names
+```{r message = FALSE, warning = FALSE}
+# create a table for HUGO genes on row and sample on column
+uniqGenes <- length(unique(matchObj$hgnc_symbol))
+uniqEnblIDs <- length(unique(matchObj$ensembl_gene_id))
+```
+There were found to be `r uniqGenes` unique gene mappings and `r uniqEnblIDs` ensembl gene IDs mapped, indicating that several of the Ensembl gene IDs mapped to the same gene. Hence, next, we will be aggregating these rows. 
+
+```{r message = FALSE, warning = FALSE}
+# Aggregate duplicated genes
+
+## find duplicated genes and unique genes
+duplicatedGenes <- unique(matchObj$hgnc_symbol[duplicated(matchObj$hgnc_symbol)])
+uniqueGenes <- unique(matchObj$hgnc_symbol)
+
+## aggregation and remove un-named gene
+matchObj <- matchObj[, -which(colnames(matchObj) == "ensembl_gene_id")]
+aggmatchObj <- aggregate(.~hgnc_symbol, data = matchObj, FUN=sum)
+aggmatchObj <- aggmatchObj[-c(aggmatchObj$hgnc_symbol == ""), ]
+
+## save intermediary objects
+saveRDS(aggmatchObj, "AggregatedDataset.RDS")
+write.csv(aggmatchObj, "AggregatedDataset.csv")
+```
+
+Our final dataset after cleaning the data results in a dataset of shape (`r dim(aggmatchObj)`), that is 33833 labelled genes and expressions values for 9 samples - 3 mock, 3 untreated and infected, 3 treated and infected.
+
+
+
+## DATA CLEANING AND PRE-PROCESSING
+
+### Remove Low Expression Genes
+```{r message = FALSE, warning = FALSE}
+# choose min number of samples
+min_samples <- 3
+
+aggMat <- as.matrix(aggmatchObj)
+rownames(aggMat) <- aggMat[, 1]
+aggMat <- aggMat[,-1]
+
+aggMat <- trimws(aggMat)
+write.csv(aggMat, "aggregated_matrix.csv")
+
+for (ri in seq_along(rownames(aggMat))){
+  for (cj in seq_along(colnames(aggMat))){
+    aggMat[ri, cj] <- as.integer(aggMat[ri, cj])
+  }
+}
+
+intMat <- matrix(as.integer(aggMat), nrow = nrow(aggMat), ncol = ncol(aggMat))
+colnames(intMat) <- c("Mock1", "Mock2", "Mock3", "Control1", "Control2", "Control3", "GW-Treated1", "GW-Treated2", "GW-Treated3")
+rownames(intMat) <- rownames(aggMat)
+
+satisfied <- rowSums(edgeR::cpm(int_matrix) > 1) >= min_samples
+cleanData <- intMat[satisfied, ]
+
+write.csv(cleanData, "CleanDataset.csv")
+saveRDS(cleanData, "CleanDataset.RDS")
+```
+From the above, we removed `r (33833 - sum(satisfied))`  genes due to low expression values.
+
+
+```{r message = FALSE, warning = FALSE}
+# Plot the data before and after
+library(hrbrthemes)
+library(ggplot2)
+
+
+## BOXPLOT
+## Add 1 to each value in the cleanData to prevent -inf errors for 0 expression
+dataAdd1 <- cleanData + 1
+dataLog <- log2(edgeR::cpm(dataAdd1))
+
+dfLog <- as.data.frame(dataLog)
+dfLog$Gene <- rownames(dfLog)
+dfLogLonger <- tidyr::pivot_longer(dfLog, cols = -Gene, names_to = "Sample", values_to = "Log2CPM")
+
+ggplot2::ggplot(dfLogLonger, aes(x = Sample, y = Log2CPM)) +
+  geom_boxplot() + 
+  labs(x = "Samples", y = "Log2 CPM") +
+  ggtitle("Boxplot showing Log2 CPM Prenormalisation")
+  
+## MDS PLOT
+limma::plotMDS(log2(cleanData), labels=NULL, pch=1,
+               col = c("red", "green", "blue")[factor(groups)])
+
+legend("topright",
+  legend=levels(factor(groups)),
+  pch=c(1), col= c("red", "green","blue"),title="Class",
+  bty = 'n', cex = 0.75)
+
+## DENSITY PLOT
+## Add 0.1 to each value in the cleanData to prevent 0 expression error
+dataAddp1 <- cleanData + 0.1
+dataLogp1 <- log2(edgeR::cpm(dataAddp1))
+
+dfLogp1 <- as.data.frame(dataLogp1)
+dfLogp1$Gene <- rownames(dfLogp1)
+dfLogLongerp1 <- tidyr::pivot_longer(dfLogp1, cols = -Gene, names_to = "Sample", values_to = "Log2CPM")
+ggplot(dfLogLongerp1, aes(x = Log2CPM, color=Sample)) +
+  geom_density() +
+  labs(x = "Log2CPM", y = "Density") +
+  theme_minimal() + 
+  ggtitle("Density Plot showing Log2 CPM Densities Prenormalisation")
+```
+
+## Normalisation 
+```{r message = FALSE, warning = FALSE}
+# Plot for the before and after
+groups <- c("Mock", "Mock", "Mock", "Control", "Control", "Control", "GW-Treated", "GW-Treated", "GW-Treated")
+
+ofDGE <- edgeR::DGEList(counts = cleanData, group=groups, remove.zeros = TRUE)
+ofDGE <- edgeR::calcNormFactors(ofDGE)
+
+normalised <- edgeR::cpm(ofDGE)
+saveRDS(normalised, "NormalisedData.RDS")
+write.csv(normalised, "normalised_data.csv")
+
+
+## BOXPLOT
+### Adding 1 to prevent 0 expression from going to -inf
+dataAdd1n <- normalised + 1
+dataLogn <- log2(edgeR::cpm(dataAdd1n))
+
+dfLogn <- as.data.frame(dataLogn)
+dfLogn$Gene <- rownames(dfLogn)
+dfLogLongern <- tidyr::pivot_longer(dfLogn, cols = -Gene, names_to = "Sample", values_to = "Log2CPM")
+
+ggplot2::ggplot(dfLogLongern, aes(x = Sample, y = Log2CPM)) +
+  geom_boxplot() + 
+  labs(x = "Samples", y = "Log2 CPM") +
+  ggtitle("Boxplot showing Log2 CPM Post-Normalisation")
+  
+## MDS PLOT
+limma::plotMDS(log2(normalised), labels=NULL, pch=1,
+               col = c("red", "green", "blue")[factor(groups)])
+
+legend("topright",
+  legend=levels(factor(groups)),
+  pch=c(1), col= c("red", "green","blue"),title="Class",
+  bty = 'n', cex = 0.75)
+
+## DENSITY PLOT
+## Add 0.1 to each value in the normalised data to prevent 0 expression error
+dataAddp1n <- normalised + 0.1
+dataLogp1n <- log2(edgeR::cpm(dataAddp1n))
+
+dfLogp1n <- as.data.frame(dataLogp1n)
+dfLogp1n$Gene <- rownames(dfLogp1n)
+dfLogLongerp1n <- tidyr::pivot_longer(dfLogp1n, cols = -Gene, names_to = "Sample", values_to = "Log2CPM")
+ggplot(dfLogLongerp1, aes(x = Log2CPM, color=Sample)) +
+  geom_density() +
+  labs(x = "Log2CPM", y = "Density") +
+  theme_minimal() + 
+  ggtitle("Density Plot showing Log2 CPM Densities Post-Normalisation")
+```
+
+## BIBLIOGRAPHY
