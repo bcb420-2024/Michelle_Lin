@@ -1,0 +1,520 @@
+---
+title: "A1: Exploration and Cleaning of Dataset"
+author: "Michelle Lin"
+date: "15 Feb 2024"
+output: 
+  html_notebook:
+    toc: true
+    toc_depth: 2
+bibliography: A2_Bibliography.bib
+---
+
+## SET UP
+
+```{r hide=TRUE, message = FALSE, warning = FALSE}
+# Set up and Install all Libraries if not present
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+if (!requireNamespace("GEOquery", quietly = TRUE))
+    install.packages("GEOquery")
+
+if (!requireNamespace("knitr", quietly = TRUE))
+    install.packages("knitr")
+
+if (!requireNamespace("edgeR", quietly = TRUE))
+    install.packages("edgeR")
+
+if (!requireNamespace("hrbrthemes", quietly = TRUE))
+    install.packages("hrbrthemes")
+
+if (!requireNamespace("ggplot2", quietly = TRUE))
+    install.packages("ggplot2")
+
+if (!requireNamespace("ComplexHeatmap", quietly = TRUE))
+    install.packages("ComplexHeatmap")
+
+if (!requireNamespace("circlize", quietly = TRUE))
+    install.packages("circlize")
+
+```
+
+### Set Global variables and constants
+```{r message = FALSE, warning = FALSE}
+# Set GEOID 
+GEOID <- "GSE160230"
+conditions <- c("Mock", "Mock", "Mock", "Control", "Control", "Control", "GWTreated", "GWTreated", "GWTreated")
+
+## File location
+workingDir <- file.path(getwd())
+```
+
+
+## SUMMARY OF NORMALISATION ON RESULTS FROM A1
+The study used is "hPSC-derived Airway Organoids-based Screen Reveals the Role of HIF1/ Glycolysis Axis in SARS-CoV-2 Infection" published in 2021 by Duan et al.[@duan2021airway]
+
+The authors conducted a study in human pluripotent stem cell  (hPSC) derived airway organoids - (hPSC-AO) where they studied the molecular mechanism behind SARS-Cov-2 infections and the differential expression of different components of the pathways when treated with GW6571. There were 9 samples and 3 conditions compared: 3 mock samples (untreated and uninfected), 3 control samples (untreated and SARS-Cov2 infected), 3 GW-treated samples (treated with GW6571 and infected with SARS-Cov2).
+
+For this project, the original down-sampled RNA-seq data set was used for analysis. Downsampling was done on the mock and GW-treated samples by the authors Duan et al, to allow for comparability amongst the three conditions. This is because there was a significantly lower human gene count captured in the control samples due to the high viral counts.
+This dataset was then pre-processed and matched using Ensembl Gene Identifiers, filtered for low expression and then normalised. The final resulting data set has 14671 genes for the 9 samples as mentioned above.
+
+
+### Running A1 and importing relevant files
+```{r message=FALSE, warning=FALSE}
+# Render notebook 1
+rmarkdown::render("../A1new/A1_MichelleLin_new.Rmd")
+```
+```{r message=FALSE, warning=FALSE}
+## import the normalised data
+
+### Note: imported object is a large matrix with rows as genes and columns as samples
+# normalisedCounts <- readRDS("../A1new/NormalisedData.RDS")
+# cleanData <- readRDS("../A1new/N")
+
+normalisedCounts <- normalised
+cleanData <- cleanData
+
+## create a separate data frame to indicate the conditions tested
+samples <- c("Mock1", "Mock2", "Mock3", "Control1", "Control2", "Control3", "GW-Treated1", "GW-Treated2", "GW-Treated3")
+
+sample_condition <- data.frame(
+  Sample = samples,
+  Condition = conditions
+)
+```
+
+
+## DIFFERENTIAL GENE EXPRESSION 
+
+### MDS Plots from A1
+```{r message=FALSE, warning=FALSE}
+## MDS PLOT
+limma::plotMDS(log2(normalisedCounts), labels=colnames(normalisedCounts), pch=5,
+               col = c("red", "green", "blue")[factor(conditions)])
+
+legend("topright",
+  legend=levels(factor(conditions)),
+  pch=c(1), col= c("red", "green","blue"),title="Condition",
+  bty = 'n', cex = 0.75)
+
+```
+From the above, we can see clustering according to the sample type / condition and thus, this will be the factor of interest in our study for differential gene expression.
+As this is a relatively simple data set, this will be the only factor of interest in our model moving forward.
+
+### Analysis & Hypothesis Testing using EdgeR
+```{r message=FALSE, warning=FALSE}
+## Create a Design Matrix
+designMatrix <- model.matrix(~conditions)
+print(designMatrix)
+```
+```{r message= FALSE, warning=FALSE}
+
+# create the DGE object using the filtered and cleaned raw counts dataset
+formDGE = edgeR::DGEList(counts=cleanData, group = conditions)
+formDGE <- edgeR::calcNormFactors(formDGE)
+
+# estimate dispersion using our model design
+formDGE <- edgeR::estimateDisp(formDGE, designMatrix)
+
+edgeR::plotBCV(formDGE, )
+
+fit <- edgeR::glmQLFit(formDGE, 
+                       designMatrix)
+
+head(fit$coefficients, 6)
+
+```
+
+### Pairwise contrasts for all conditions
+
+For this test, a cutoff significance value of 5% was used to find genes that showed differential expression as this was what was suggested and used by the paper. That is, for genes to be identified as statistically significant, there is less that 5% chance of getting this differential expression randomly. A significance cutoff of 5% is also the usual standard.
+
+For the volcano plots, an absolute Fold Change greater 1 and signficance less than 0.05 was used to determine whether the genes are diffrentially expressed and of interest for pathway analysis later.
+
+#### Control vs Treated
+```{r message= FALSE, warning=FALSE}
+## control vs treated
+qlf.control_vs_treated <- edgeR::glmQLFTest(fit, 
+                                  coef = 2)
+
+qlf_output_hits <- edgeR::topTags(qlf.control_vs_treated,
+                                  sort.by = "PValue",
+                                  n = nrow(normalisedCounts)
+                                  )
+
+length(which(qlf_output_hits$table$PValue < 0.05))
+length(which(qlf_output_hits$table$FDR < 0.05))
+```
+
+From the above comparison of control vs treated conditions, it resulted in 6354 significantly DE genes and 4637 significantly DE genes after correction, both using a significance cutoff of 0.05. 
+The top 6 differentially expressed genes are shown: 
+```{r message= FALSE, warning=FALSE, echo=FALSE} 
+knitr::kable(qlf_output_hits[1:6,], 
+             type="html",
+             row.names =TRUE
+             )
+```
+
+```{r}
+## Volcano Plot
+
+deDF <- as.data.frame(qlf_output_hits$table)
+deDF$diff_expr <- "NO"
+
+# if log2Foldchange > 1 and pvalue < 0.05, set as "UP" 
+deDF$diff_expr[deDF$logFC > 1 & deDF$PValue < 0.05] <- "UP"
+
+# if log2Foldchange < -0.6 and pvalue < 0.05, set as "DOWN"
+deDF$diff_expr[deDF$logFC < -1 & deDF$PValue < 0.05] <- "DOWN"
+
+## Add labels for diffrentially expressed genes
+deDF$label <- NA
+deDF$label[deDF$diff_expr != "NO"] <- rownames(deDF)[deDF$diff_expr != "NO"]
+
+
+ggplot(data=deDF, aes(x=logFC, y=-log10(PValue), col=diff_expr)) + 
+    geom_point() + 
+    theme_minimal() +
+    scale_color_manual(values=c("salmon", "grey", "skyblue")) + 
+    ggtitle("Volcano Plot of DE Genes in Control vs Treated")
+```
+```{r}
+# # create matrix
+# heatmapMat <- normalisedCounts[,4:ncol(normalisedCounts)]
+# 
+# # subset data for top hits
+# topHits <- rownames(qlf_output_hits$table)[qlf_output_hits$table$PValue<0.05]
+# heatmapMatTop <- t(scale(t(heatmapMat[which(rownames(heatmapMat)
+#                                                      %in% topHits),])))
+# 
+# 
+# # set heatmap colour scale
+# if(min(heatmapMatTop) == 0){
+#   heatmapCol = circlize::colorRamp2(c( 0, max(heatmapMatTop)),
+#                            c( "white", "red"))
+# } else {
+#   heatmapCol = circlize::colorRamp2(c(min(heatmapMatTop), 0, max(heatmapMatTop)), 
+#                           c("blue", "white", "red"))
+# }
+# 
+# 
+# # define colours and annotations
+# uniqCond <- unique("Control", "GWTreated")
+# uniqCondCol <- rainbow(n = length(uniqCond))
+# names(uniqCondCol) <- uniqCond
+# 
+# annotations <- c("Control", "Control", "Control", "GWTreated", "GWTreated", "GWTreated")
+# 
+# ha_pat <- ComplexHeatmap::HeatmapAnnotation(df = data.frame(x=colnames(heatmapMatTop), y=annotations),
+#                                             col = list(condition = uniqCondCol),
+#                                             show_legend = TRUE)
+# 
+# 
+# # generate heatmap
+# ComplexHeatmap::Heatmap(as.matrix(heatmapMatTop),
+#                         top_annotation = ha_pat,
+#                         cluster_rows = TRUE,
+#                         cluster_columns = TRUE,
+#                         show_row_dend = TRUE,
+#                         show_column_dend = TRUE, 
+#                         col=heatmapCol,
+#                         show_column_names =FALSE,
+#                         show_row_names = FALSE,
+#                         show_heatmap_legend = TRUE,
+#                         column_title = ("Top hits across samples"))
+```
+
+
+#### Control vs Mock
+```{r message= FALSE, warning=FALSE}
+## control vs mock
+qlf.control_vs_mock <- edgeR::glmQLFTest(fit, 
+                                  coef = 3)
+
+qlf_output_hits <- edgeR::topTags(qlf.control_vs_mock,
+                           sort.by = "PValue",
+                           n = nrow(normalisedCounts))
+
+length(which(qlf_output_hits$table$PValue < 0.05))
+length(which(qlf_output_hits$table$FDR < 0.05))
+
+```
+From the above comparison of control vs mock conditions, it resulted in 1854 significantly DE genes and 207 significantly DE genes after correction, both using a significance cutoff of 0.05. 
+The top 6 differentially expressed genes are shown: 
+```{r message= FALSE, warning=FALSE, echo=FALSE} 
+knitr::kable(qlf_output_hits[1:6,], 
+             type="html",
+             row.names =TRUE
+             )
+```
+
+```{r}
+## Volcano Plot
+
+deDF <- as.data.frame(qlf_output_hits$table)
+deDF$diff_expr <- "NO"
+
+# if log2Foldchange > 1 and pvalue < 0.05, set as "UP" 
+deDF$diff_expr[deDF$logFC > 1 & deDF$PValue < 0.05] <- "UP"
+
+# if log2Foldchange < -0.6 and pvalue < 0.05, set as "DOWN"
+deDF$diff_expr[deDF$logFC < -1 & deDF$PValue < 0.05] <- "DOWN"
+
+## Add labels for diffrentially expressed genes
+deDF$label <- NA
+deDF$label[deDF$diff_expr != "NO"] <- rownames(deDF)[deDF$diff_expr != "NO"]
+
+
+ggplot(data=deDF, aes(x=logFC, y=-log10(PValue), col=diff_expr)) + 
+    geom_point() + 
+    theme_minimal() +
+    scale_color_manual(values=c("salmon", "grey", "skyblue")) + 
+    ggtitle("Volcano Plot of DE Genes in Control vs Mock")
+```
+
+#### Treated vs Mock 
+```{r message= FALSE, warning=FALSE}
+## treated vs mock
+qlf.treated_vs_mock <- edgeR::glmQLFTest(fit, contrast=c(0,-1,1))
+
+qlf_output_hits <- edgeR::topTags(qlf.treated_vs_mock,
+                           sort.by = "PValue",
+                           n = nrow(normalisedCounts))
+
+length(which(qlf_output_hits$table$PValue < 0.05))
+length(which(qlf_output_hits$table$FDR < 0.05))
+```
+
+From the above comparison of treated vs mock conditions, it resulted in 6341 significantly DE genes and 4768 significantly DE genes after correction, both using a significance cutoff of 0.05. 
+The top 6 differentially expressed genes are shown: 
+```{r message= FALSE, warning=FALSE, echo=FALSE} 
+knitr::kable(qlf_output_hits[1:6,], 
+             type="html",
+             row.names =TRUE
+             )
+```
+
+```{r}
+## Volcano Plot
+
+deDF <- as.data.frame(qlf_output_hits$table)
+deDF$diff_expr <- "NO"
+
+# if log2Foldchange > 1 and pvalue < 0.05, set as "UP" 
+deDF$diff_expr[deDF$logFC > 1 & deDF$PValue < 0.05] <- "UP"
+
+# if log2Foldchange < -0.6 and pvalue < 0.05, set as "DOWN"
+deDF$diff_expr[deDF$logFC < -1 & deDF$PValue < 0.05] <- "DOWN"
+
+## Add labels for diffrentially expressed genes
+deDF$label <- NA
+deDF$label[deDF$diff_expr != "NO"] <- rownames(deDF)[deDF$diff_expr != "NO"]
+
+
+ggplot(data=deDF, aes(x=logFC, y=-log10(PValue), col=diff_expr)) + 
+    geom_point() + 
+    theme_minimal() +
+    scale_color_manual(values=c("salmon", "grey", "skyblue")) + 
+    ggtitle("Volcano Plot of DE Genes in Treated vs Mock ")
+```
+
+#### Differential Expression amongst all conditions
+```{r message= FALSE, warning=FALSE}
+# differential expression amongst all
+qlf <- edgeR::glmQLFTest(fit, coef=2:3)
+knitr::kable(edgeR::topTags(qlf), 
+      type="html",
+      row.names =TRUE)
+
+qlf_output_hits_overall <- edgeR::topTags(qlf,
+                           sort.by = "PValue",
+                           n = nrow(normalisedCounts))
+
+length(which(qlf_output_hits_overall$table$PValue < 0.05))
+length(which(qlf_output_hits_overall$table$FDR < 0.05))
+
+```
+From the above comparison of conditions, it resulted in 6598 significantly DE genes and 4940 significantly DE genes after correction, both using a significance cutoff of 0.05. 
+The top 6 differentially expressed genes are shown: 
+```{r message= FALSE, warning=FALSE, echo=FALSE} 
+knitr::kable(qlf_output_hits_overall[1:6,], 
+             type="html",
+             row.names =TRUE
+             )
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# create matrix
+heatmapMat <- normalisedCounts
+
+# subset data for top hits
+topHits <- rownames(qlf_output_hits_overall$table)[qlf_output_hits_overall$table$PValue<0.05]
+heatmapMatTop <- t(scale(t(heatmapMat[which(rownames(heatmapMat) %in% topHits),])))
+
+
+# set heatmap colour scale
+if(min(heatmapMatTop) == 0){
+  heatmapCol = circlize::colorRamp2(c( 0, max(heatmapMatTop)),
+                           c( "white", "red"))
+} else {
+  heatmapCol = circlize::colorRamp2(c(min(heatmapMatTop), 0, max(heatmapMatTop)), 
+                          c("blue", "white", "red"))
+}
+
+
+# define colours and annotations
+uniqCond <- unique(conditions)
+uniqCondCol <- rainbow(n = length(uniqCond))
+names(uniqCondCol) <- uniqCond
+
+ha_pat <- ComplexHeatmap::HeatmapAnnotation(df = data.frame(sample_condition),
+                                            col = list(condition = uniqCondCol),
+                                            show_legend = TRUE)
+
+
+# generate heatmap
+ComplexHeatmap::Heatmap(as.matrix(heatmapMatTop),
+                        top_annotation = ha_pat,
+                        cluster_rows = TRUE,
+                        cluster_columns = TRUE,
+                        show_row_dend = TRUE,
+                        show_column_dend = TRUE, 
+                        col=heatmapCol,
+                        show_column_names =FALSE,
+                        show_row_names = FALSE,
+                        show_heatmap_legend = TRUE,
+                        column_title = ("Top hits across samples"))
+```
+From the above HeatMap, it is observed that the control and mock samples are clustered together compared to the GW-treated sample. This is also reinforced in the initial MDS plot where the control and mock samples are closer together than the treated samples. 
+
+
+
+## THRESHOLD OVER-REPRESENTATION ANALYSIS
+
+### Over Representation Analysis
+From the above, we can try running analysis on the control vs treated samples for over-representation analysis as a result of differential expression in these samples.
+```{r}
+# note top hits
+ctrl_trt_top <- edgeR::topTags(qlf.control_vs_treated, n = nrow(normalisedCounts))
+
+# number of upregulated genes
+numUp <- length(which(ctrl_trt_top$table$PValue < 0.05 & ctrl_trt_top$table$logFC > 1))
+
+numDown <- length(which(ctrl_trt_top$table$PValue < 0.05 & ctrl_trt_top$table$logFC < -1))
+```
+Using thresholds as suggested by the paper for pathway analysis absolute logFC of 1 and significance at 5%, it was found that there were `r numUp` up regulated genes and `r numDown` down regulated genes. 
+
+
+```{r}
+# Create non-thresholded list of genes
+qlfDF <- as.data.frame(ctrl_trt_top$table)
+qlfDF$Gene <- rownames(qlfDF)
+qlfDF$Rank <- log(qlfDF$PValue,base =10) * sign(qlfDF$logFC)
+qlfDF <- qlfDF[order(qlfDF$Rank),]
+
+# write to table and save
+write.table(x=data.frame(genename=qlfDF$Gene,
+                         F_stat= qlfDF$Rank),
+            file=file.path(getwd(),"treated_vs_control_nonthreshold.txt"),
+            sep = "\t",
+            row.names = FALSE,
+            col.names = FALSE,
+            quote = FALSE)
+
+# Create thresholded list of genes
+upregulated_genes <- qlfDF$Gene[which(qlfDF$PValue < 0.05 & qlfDF$logFC > 1)]
+downregulated_genes <- qlfDF$Gene[which(qlfDF$PValue < 0.05 & qlfDF$logFC < -1)]
+
+
+write.table(x=upregulated_genes,
+            file=file.path(getwd(),"upregulated_genes.txt"),
+            sep = "\t",
+            row.names = FALSE,
+            col.names = FALSE,
+            quote = FALSE)
+
+write.table(x=downregulated_genes,
+            file=file.path(getwd(),"downregulated_genes.txt"),
+            sep = "\t",
+            row.names = FALSE,
+            col.names = FALSE,
+            quote = FALSE)
+```
+
+```{r message= FALSE, warning=FALSE}
+## for both up and down regulated
+query_set <- c(upregulated_genes, downregulated_genes)
+bothRes <- gprofiler2::gost(query = query_set ,
+                          significant=FALSE,
+                          ordered_query = FALSE,
+                          exclude_iea=TRUE,
+                          correction_method = "fdr",
+                          organism = "hsapiens",
+                          source = c("REAC","WP","GO:BP"))
+
+# GProfiler results
+bothEnrRes <- bothRes$result
+bothEnrResTop <- bothRes$result[bothRes$result$p_value < 0.05,]
+bothEnrResTop[1:5,]
+
+```
+There were 1083 significant pathway hits using a significance of 5%, some of which are shown above. From the above table, the top pathway hits involved mitotic cell cycles. 
+
+### Up-regulated set of genes analysis
+```{r message= FALSE, warning=FALSE}
+## for up-reg
+
+upregRes <- gprofiler2::gost(query = upregulated_genes,
+                          significant=FALSE,
+                          ordered_query = FALSE,
+                          exclude_iea=TRUE,
+                          correction_method = "fdr",
+                          organism = "hsapiens",
+                          source = c("REAC","WP","GO:BP"))
+
+# GProfiler results
+upregEnrRes <- upregRes$result
+upregEnrResTop <- upregRes$result[upregRes$result$p_value < 0.05,]
+upregEnrResTop[1:5,]
+
+```
+It was found that there were 320 significant pathways, some of which are shown above. From the above table, the top pathway hits involved defense mechanism which are involved in immune response to viral infections - SARS-Cov2. 
+
+
+### Down-regulated set of genes analysis
+```{r message= FALSE, warning=FALSE}
+## for down-reg
+downregRes <- gprofiler2::gost(query = downregulated_genes,
+                          significant=FALSE,
+                          ordered_query = FALSE,
+                          exclude_iea=TRUE,
+                          correction_method = "fdr",
+                          organism = "hsapiens",
+                          source = c("REAC","WP","GO:BP"))
+
+# GProfiler results
+downregEnrRes <- downregRes$result
+downregEnrResTop <- downregRes$result[downregRes$result$p_value < 0.05,]
+downregEnrResTop[1:5,]
+```
+There were 1173 significant pathways using a signifcance threshold of 0.05. The down-regulated genes seem to be involved in mitotic cell processes and could potentially have overwhelmed the upregulated genes in the combined results as there are significantly more down-regulated genes than upregulated genes (905:383 respectively). 
+
+### Visualisations
+The top 5 hits in each category of enrichment analysis were as follows: 
+
+| Both | Upregulated | DownRegulated |
+|-----------------|-----------------|-----------------|
+| `r bothEnrRes[1:5,]$term_name[1]` | `r upregEnrRes[1:5,]$term_name[1]` | `r downregEnrRes[1:5,]$term_name[1]` |
+| `r bothEnrRes[1:5,]$term_name[2]` | `r upregEnrRes[1:5,]$term_name[2]` | `r downregEnrRes[1:5,]$term_name[2]` |
+| `r bothEnrRes[1:5,]$term_name[3]` | `r upregEnrRes[1:5,]$term_name[3]` | `r downregEnrRes[1:5,]$term_name[3]` |
+| `r bothEnrRes[1:5,]$term_name[4]` | `r upregEnrRes[1:5,]$term_name[4]` | `r downregEnrRes[1:5,]$term_name[4]` |
+| `r bothEnrRes[1:5,]$term_name[5]` | `r upregEnrRes[1:5,]$term_name[5]` | `r downregEnrRes[1:5,]$term_name[5]` |
+
+
+## CONCLUSION 
+This analysis does provide some support to the results in the paper. In the paper, it was mentioned that GW-treated had resulted in a decreased expression in chemokines - which was also present in our analysis after taking a look at the down-regulated genes. However, what was different in this analysis compared to the paper's was that in this analysis, it was found that up-regulated genes were involved in defense mechanisms whereas the paper found that GW-treatment did not have much of an impact on the interferon pathway - involved in defense against pathogens. Some more analysis can potentially be done to compare infected vs non-infected as well.
+
+
+## BIBLIOGRAPHY
