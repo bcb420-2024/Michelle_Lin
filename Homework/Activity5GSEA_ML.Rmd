@@ -1,0 +1,87 @@
+---
+title: "Activity 5: GSEA Assignment"
+output: html_notebook
+---
+
+```{r}
+# Set Up
+
+## 1. Download relevant packages
+#install required R and bioconductor packages
+tryCatch(expr = { library("RCurl")}, 
+         error = function(e) {  
+           install.packages("RCurl")}, 
+         finally = library("RCurl"))
+
+
+## 2. Set configurable parameters
+# path to GSEA jar 
+gsea_jar <- "/home/rstudio/GSEA_4.3.2/gsea-cli.sh"
+
+# directory where all the data files are found.
+working_dir <- "/home/rstudio/projects/GSEA_assignment/"
+
+# directory where all the generated data files are found. 
+output_dir <- "/home/rstudio/projects/GSEA_assignment/generated_data/gsea/"
+
+# the name to give the analysis in GSEA
+analysis_name <- "Mesen_vs_Immuno"
+
+# rank file to use in GSEA analysis.  
+rnk_file <- "MesenvsImmuno_RNASeq_ranks.rnk"
+
+#run_gsea - true/false
+# This parameter is for the compilation of the notebook.  
+run_gsea <- TRUE
+
+#set the gmt file you want to use if you don't want to use the latest gmt file.
+# For example, if you set dest_gmt_file =="" the below script will automatically
+# download the latest gmt file from baderlab website.  If it is set then it
+# will use the file specified.  
+dest_gmt_file = file.path(output_dir,                         "Human_GOBP_AllPathways_noPFOCR_no_GO_iea_March_01_2024_symbol.gmt")
+```
+
+```{r}
+if(dest_gmt_file == ""){
+  gmt_url = "http://download.baderlab.org/EM_Genesets/current_release/Human/symbol/"
+  
+  #list all the files on the server
+  filenames = getURL(gmt_url)
+  tc = textConnection(filenames)
+  contents = readLines(tc)
+  close(tc)
+  
+  #get the gmt that has all the pathways and does not include terms 
+  # inferred from electronic annotations(IEA)
+  #start with gmt file that has pathways only and GO Biological Process only.
+  rx = gregexpr("(?<=<a href=\")(.*.GOBP_AllPathways_no_GO_iea.*.)(.gmt)(?=\">)",
+    contents, perl = TRUE)
+  gmt_file = unlist(regmatches(contents, rx))
+  
+  dest_gmt_file <- file.path(output_dir,gmt_file )
+  
+  #check if this gmt file already exists
+  if(!file.exists(dest_gmt_file)){
+    download.file(
+      paste(gmt_url,gmt_file,sep=""),
+      destfile=dest_gmt_file
+    )
+  }
+}
+```
+
+```{r}
+## Run GSEA
+if(run_gsea){
+  command <- paste("",gsea_jar,  
+                   "GSEAPreRanked -gmx", dest_gmt_file, 
+                   "-rnk" ,file.path(working_dir,rnk_file), 
+                   "-collapse false -nperm 1000 -scoring_scheme weighted", 
+                   "-rpt_label ",analysis_name,
+                   "  -plot_top_x 20 -rnd_seed 12345  -set_max 200",  
+                   " -set_min 15 -zip_report false ",
+                   " -out" ,output_dir, 
+                   " > gsea_output.txt",sep=" ")
+  system(command)
+}
+```
