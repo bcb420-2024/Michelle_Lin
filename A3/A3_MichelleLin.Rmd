@@ -182,10 +182,36 @@ After running the above code and examining the output, it was found that:
 From a top level, it does seem that the most significant pathways are similar to those that were found in the G:Profiler analysis as well. From article [@Johnson_1998], it is known that E2F is involved in the regulation of progression from G1 to S stage via E2F transcriptions and thus, the mitotic process, similar to that discovered in the down-regulated set of genes in the analysis in GProfiler. 
 Similarly, for upregulated genes, it was found that the top pathway was involved in immunoreaction involving the interferon. 
 
-## Cytoscape
+## Cytoscape [Vi]
+Using Cytoscape [@shannon2003cytoscape], I generated GSEA pathways were used to generate a network map - specifically, the files: "gsea_report_for_na_neg_1713127254725.tsv" and "gsea_report_for_na_pos_1713127254725.tsv" were used as input files for the downregulated and upregulated genes respectively. A FDR q-value cutoff of 0.0001 was used to generate the graph to indicate only the gene-sets that were significantly enriched. An edge cutoff of 0.375, the default was also used creating a denser graph representation. In the graph below, the original representation style is used to generate the graph with the size of the node representing the size of the gene set, the colour of the node representing the up-regulated vs down-regulated genes as mentioned below and the label of nodes as the geneset description. Edges link genesets with overlapping genes and have a corresponding thickness relative to the overlap statistic. This graph is shown below 
+
+```{r}
+knitr::include_graphics("./cytoscape/all_pathway_networks.png")
+```
+Image showing the networks for up-regulated and down-regulated pathway genes. The red nodes indicate up-regulated genes with the blue genes representing the down-regulated genes.  
+
+The above map contains 176 nodes/ gene sets with 1270 edges, with an average number of 6.3 neighbours in an un-directed graph. 
+
+Annotating the graph, we have the following network: 
+```{r}
+knitr::include_graphics("./cytoscape/annotated network.png")
+```
+Image showing the pathway involvements for the clustered gene sets with major up-regulated genes, shown in red and down-regulated genes shown in blue. 
+
+
+From the above diagram, we see that dependent protein synthesis is the largest network consisting of 40 nodes. This network also involve genesets that are upregulated. 
+
+From our original GSEA results, we saw that the HALLMARK_INTERFERON_ALPHA_SIGNALLING gene set is the most significant pathway in the upregulated genes and thus, is the pathway I am interested in. Using an imported Wikipathway database [@wikipathway], I created the network for Interferon alpha/ beta signalling. This was then annotated using the ranked gene set with red showing the up-regulated genes and blue the down-regulated genes. From the following graph, we see that a majority of the genes involved in the Interferon pathway are red and hence up-regulated which is expected. 
+
+```{r}
+knitr::include_graphics("./cytoscape/wikipathway signals.png")
+```
+Image showing the annotated gene set network with ranked genes - red indicating more up-regulated genes and blue down-regulated genes.
+
 
 ## Interpretation:
 The enrichment results from GSEA are similar to that in Assignment 2. Using the thresholded analysis in Assignment 2, it was found that genes were enriched in similar pathways. For down regulated genes, the genes enriched were found to be involved in mitotic processes in both test. At the opposite end, the upregulated genes seemed to be involved in immunoreaction, both with the top pathway being related to interferons. 
+From the pathway visualisations and analysis using 
 This however, as mentioned in Assignment 2, differed compared to the paper’s was that in this analysis as I found that up-regulated genes were involved in defense mechanisms whereas the paper found that GW-treatment did not have much of an impact on the interferon pathway - involved in defense against pathogens. I'm not certain why this may be but it is potential that due to the parameters used in our analysis, that it may differ from the results that were deemed significant in the papers.
 
 ## Bibliography
